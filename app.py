@@ -95,13 +95,15 @@ audio_data = st.text_input("Audio Data (oculto)", key="audio_data", label_visibi
 
 if audio_data:
     # Decodificar el audio Base64 y guardarlo en un archivo temporal
-    audio_bytes = base64.b64decode(audio_data)
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as tmp_file:
-        tmp_file.write(audio_bytes)
-        tmp_file_path = tmp_file.name
+    try:
+        audio_bytes = base64.b64decode(audio_data)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as tmp_file:
+            tmp_file.write(audio_bytes)
+            tmp_file_path = tmp_file.name
 
-    with st.spinner('Procesando audio...'):
-        try:
+        st.write(f"Archivo temporal creado: {tmp_file_path}")
+
+        with st.spinner('Procesando audio...'):
             # Preparar el archivo para enviar a la API de LemonFox
             files = {
                 'file': ('recording.webm', open(tmp_file_path, 'rb'), 'audio/webm')
@@ -124,6 +126,7 @@ if audio_data:
 
             if response.status_code == 200:
                 transcription_data = response.json()
+                st.write("Respuesta de la API:", transcription_data)  # Depuración
                 if 'text' in transcription_data:
                     st.session_state.transcription = transcription_data['text']
                     st.success('Audio transcrito exitosamente')
@@ -132,15 +135,17 @@ if audio_data:
             else:
                 st.error(f'Error en la transcripción del audio: {response.text}')
 
-        except Exception as e:
-            st.error(f'Error al procesar el audio: {str(e)}')
-        
-        finally:
-            # Eliminar el archivo temporal
-            try:
+    except Exception as e:
+        st.error(f'Error al procesar el audio: {str(e)}')
+    
+    finally:
+        # Eliminar el archivo temporal
+        try:
+            if 'tmp_file_path' in locals():
                 os.unlink(tmp_file_path)
-            except Exception as e:
-                st.warning(f"No se pudo eliminar el archivo temporal: {str(e)}")
+                st.write(f"Archivo temporal eliminado: {tmp_file_path}")
+        except Exception as e:
+            st.warning(f"No se pudo eliminar el archivo temporal: {str(e)}")
 
 # Mostrar la transcripción si está disponible
 if st.session_state.transcription:
