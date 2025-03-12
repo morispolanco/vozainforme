@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_audio_recorder import st_audiorec  # Librería para grabar audio
+import base64
 import tempfile
 import requests
 import os
@@ -44,12 +44,55 @@ if 'transcription' not in st.session_state:
 if 'report' not in st.session_state:
     st.session_state.report = ""
 
-# Sección de grabación de audio
+# Sección de grabación de audio con JavaScript
 st.subheader("Grabación de Audio")
-audio_bytes = st_audiorec()  # Grabar audio usando st_audiorec
+st.markdown("""
+<script>
+    let recorder, audio_stream;
 
-if audio_bytes:
-    # Crear un archivo temporal para guardar el audio grabado
+    // Función para iniciar la grabación
+    async function startRecording() {
+        audio_stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recorder = new MediaRecorder(audio_stream);
+        const chunks = [];
+
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: "audio/webm" });
+            const audio_url = URL.createObjectURL(blob);
+            const audio_base64 = btoa(await blob.arrayBuffer().then(buf => String.fromCharCode(...new Uint8Array(buf))));
+            document.getElementById("audio_data").value = audio_base64;
+            document.getElementById("audio_submit").click();
+        };
+
+        recorder.start();
+    }
+
+    // Función para detener la grabación
+    function stopRecording() {
+        if (recorder && recorder.state === "recording") {
+            recorder.stop();
+            audio_stream.getTracks().forEach(track => track.stop());
+        }
+    }
+</script>
+""", unsafe_allow_html=True)
+
+# Botones para controlar la grabación
+if st.button("Iniciar Grabación"):
+    st.markdown("<script>startRecording();</script>", unsafe_allow_html=True)
+    st.info("Grabando... Presiona 'Detener Grabación' cuando termines.")
+
+if st.button("Detener Grabación"):
+    st.markdown("<script>stopRecording();</script>", unsafe_allow_html=True)
+    st.success("Grabación detenida.")
+
+# Campo oculto para enviar los datos de audio a Python
+audio_data = st.text_input("Audio Data (oculto)", key="audio_data", label_visibility="hidden")
+
+if audio_data:
+    # Decodificar el audio Base64 y guardarlo en un archivo temporal
+    audio_bytes = base64.b64decode(audio_data)
     with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as tmp_file:
         tmp_file.write(audio_bytes)
         tmp_file_path = tmp_file.name
