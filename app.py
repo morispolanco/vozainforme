@@ -59,10 +59,13 @@ st.markdown("""
         recorder.ondataavailable = e => chunks.push(e.data);
         recorder.onstop = () => {
             const blob = new Blob(chunks, { type: "audio/webm" });
-            const audio_url = URL.createObjectURL(blob);
-            const audio_base64 = btoa(await blob.arrayBuffer().then(buf => String.fromCharCode(...new Uint8Array(buf))));
-            document.getElementById("audio_data").value = audio_base64;
-            document.getElementById("audio_submit").click();
+            const reader = new FileReader();
+            reader.onload = () => {
+                const audio_base64 = reader.result.split(',')[1];
+                document.getElementById("audio_data").value = audio_base64;
+                document.getElementById("audio_submit").click();
+            };
+            reader.readAsDataURL(blob);
         };
 
         recorder.start();
@@ -85,7 +88,7 @@ if st.button("Iniciar Grabación"):
 
 if st.button("Detener Grabación"):
     st.markdown("<script>stopRecording();</script>", unsafe_allow_html=True)
-    st.success("Grabación detenida.")
+    st.success("Grabación detenida. Procesando audio...")
 
 # Campo oculto para enviar los datos de audio a Python
 audio_data = st.text_input("Audio Data (oculto)", key="audio_data", label_visibility="hidden")
