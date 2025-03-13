@@ -1,4 +1,4 @@
-streamlit==1.22.0
-requests==2.31.0
-pydub==0.25.1
-streamlit-webrtc==0.94
+streamlit
+requests
+pydub
+streamlit-webrtc
