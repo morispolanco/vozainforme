@@ -1,11 +1,10 @@
-import streamlit as st
-import requests
-import json
-import os
+import queue  # Importar la clase queue para manejar la excepción Empty
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 from pydub import AudioSegment
 import speech_recognition as sr
-import io
+import requests
+import json
+import streamlit as st
 
 # Configuración de las API Keys desde los Secrets de Streamlit
 LEMON_FOX_API_KEY = st.secrets["lemon_fox"]["api_key"]
@@ -59,19 +58,6 @@ def generar_reporte_policial(transcripcion):
 st.title("Transcripción y Reporte Policial desde Micrófono")
 
 # Captura de audio desde el micrófono
-def audio_callback(audio):
-    # Convertir el audio a un formato compatible con SpeechRecognition
-    audio_segment = AudioSegment(
-        data=audio.to_ndarray().tobytes(),
-        sample_width=audio.sample_width,
-        frame_rate=audio.sample_rate,
-        channels=1
-    )
-    # Guardar el audio en un archivo temporal
-    audio_segment.export("temp_audio.wav", format="wav")
-    return audio_segment
-
-# Usar streamlit-webrtc para capturar audio desde el micrófono
 webrtc_ctx = webrtc_streamer(
     key="microfono",
     mode=WebRtcMode.SENDONLY,
@@ -82,7 +68,13 @@ webrtc_ctx = webrtc_streamer(
 
 if webrtc_ctx.audio_receiver:
     st.write("Grabando audio... Habla ahora.")
-    audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=5)  # Grabar durante 5 segundos
+    try:
+        # Intentar obtener frames de audio
+        audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=5)  # Grabar durante 5 segundos
+    except queue.Empty:
+        st.warning("No se detectó audio. Por favor, habla en el micrófono.")
+        audio_frames = None
+
     if audio_frames:
         # Combinar los frames de audio en un solo segmento
         audio_segment = AudioSegment.empty()
