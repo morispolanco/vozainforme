@@ -1,16 +1,17 @@
-import streamlit as st
-import requests
-import json
-import os
+import queue  # Importar la clase queue para manejar la excepción Empty
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 from pydub import AudioSegment
 import speech_recognition as sr
+import requests
+import json
+import streamlit as st
 
 # Configuración de las API Keys desde los Secrets de Streamlit
 LEMON_FOX_API_KEY = st.secrets["lemon_fox"]["api_key"]
 DASHSCOPE_API_KEY = st.secrets["dashscope"]["api_key"]
 
 # Función para transcribir audio usando SpeechRecognition
-def transcribir_audio_desde_archivo(audio_file):
+def transcribir_audio_desde_microfono(audio_file):
     recognizer = sr.Recognizer()
     with sr.AudioFile(audio_file) as source:
         audio = recognizer.record(source)
@@ -54,34 +55,59 @@ def generar_reporte_policial(transcripcion):
         return None
 
 # Interfaz de Streamlit
-st.title("Transcripción y Reporte Policial desde Archivo de Audio")
+st.title("Transcripción y Reporte Policial desde Micrófono")
 
-# Subir archivo de audio
-audio_file = st.file_uploader("Sube un archivo de audio", type=["wav", "mp3"])
+# Captura de audio desde el micrófono
+webrtc_ctx = webrtc_streamer(
+    key="microfono",
+    mode=WebRtcMode.SENDONLY,
+    audio_receiver_size=256,
+    media_stream_constraints={"audio": True},
+    async_processing=True,
+)
 
-if audio_file is not None:
-    # Guardar el archivo de audio temporalmente
-    with open("temp_audio.wav", "wb") as f:
-        f.write(audio_file.getbuffer())
-    
-    # Transcribir el audio
-    st.write("Transcribiendo audio...")
-    transcripcion = transcribir_audio_desde_archivo("temp_audio.wav")
-    
-    if transcripcion:
-        st.write("Transcripción completada:")
-        st.write(transcripcion)
+if webrtc_ctx.audio_receiver:
+    st.write("Grabando audio... Habla ahora.")
+    try:
+        # Intentar obtener frames de audio
+        audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=5)  # Grabar durante 5 segundos
+    except queue.Empty:
+        st.warning("No se detectó audio. Por favor, habla en el micrófono.")
+        audio_frames = None
+
+    if audio_frames:
+        # Combinar los frames de audio en un solo segmento
+        audio_segment = AudioSegment.empty()
+        for frame in audio_frames:
+            audio_segment += AudioSegment(
+                data=frame.to_ndarray().tobytes(),
+                sample_width=frame.sample_width,
+                frame_rate=frame.sample_rate,
+                channels=1
+            )
+        # Guardar el audio en un archivo temporal
+        audio_segment.export("temp_audio.wav", format="wav")
         
-        # Generar el reporte policial
-        st.write("Generando reporte policial...")
-        reporte = generar_reporte_policial(transcripcion)
+        # Transcribir el audio
+        st.write("Transcribiendo audio...")
+        transcripcion = transcribir_audio_desde_microfono("temp_audio.wav")
         
-        if reporte:
-            st.write("Reporte policial generado:")
-            st.write(reporte)
+        if transcripcion:
+            st.write("Transcripción completada:")
+            st.write(transcripcion)
+            
+            # Generar el reporte policial
+            st.write("Generando reporte policial...")
+            reporte = generar_reporte_policial(transcripcion)
+            
+            if reporte:
+                st.write("Reporte policial generado:")
+                st.write(reporte)
+            else:
+                st.error("No se pudo generar el reporte policial.")
         else:
-            st.error("No se pudo generar el reporte policial.")
+            st.error("No se pudo transcribir el audio.")
     else:
-        st.error("No se pudo transcribir el audio.")
+        st.warning("No se detectó audio. Por favor, habla en el micrófono.")
 else:
-    st.warning("Por favor, sube un archivo de audio.")
+    st.warning("El micrófono no está activado. Por favor, permite el acceso al micrófono.")
