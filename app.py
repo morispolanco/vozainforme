@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
-import os
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import av
 from pydub import AudioSegment
 from io import BytesIO
 
@@ -85,15 +86,34 @@ if option == "Subir archivo de audio":
                     st.write(report)
 
 elif option == "Usar micrófono":
-    audio_bytes = st_audiorec()
-    if audio_bytes:
-        st.audio(audio_bytes, format="audio/wav")
-        # Convertir bytes a archivo temporal
-        audio_segment = AudioSegment.from_file(BytesIO(audio_bytes), format="wav")
-        temp_file = BytesIO()
-        audio_segment.export(temp_file, format="wav")
-        temp_file.seek(0)
-        if st.button("Transcribir y Generar Reporte"):
+    # Buffer para almacenar el audio grabado
+    audio_buffer = []
+
+    def audio_frame_callback(frame):
+        # Almacenar los bytes de audio en el buffer
+        audio_buffer.append(frame.to_ndarray().tobytes())
+        return frame
+
+    # Configuración de WebRTC para grabar audio
+    webrtc_streamer(
+        key="audio_recorder",
+        mode=WebRtcMode.SENDONLY,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        audio_frame_callback=audio_frame_callback,
+    )
+
+    if st.button("Detener grabación y procesar"):
+        if len(audio_buffer) == 0:
+            st.error("No se ha grabado ningún audio.")
+        else:
+            # Convertir los bytes de audio a un archivo temporal
+            audio_bytes = b"".join(audio_buffer)
+            audio_segment = AudioSegment.from_file(BytesIO(audio_bytes), format="wav")
+            temp_file = BytesIO()
+            audio_segment.export(temp_file, format="wav")
+            temp_file.seek(0)
+
+            # Transcribir el audio
             with st.spinner("Transcribiendo audio..."):
                 transcription = transcribe_audio(temp_file, language="spanish")
             if transcription:
@@ -104,24 +124,3 @@ elif option == "Usar micrófono":
                 if report:
                     st.subheader("Reporte Policial:")
                     st.write(report)
-
-# Función auxiliar para grabar audio desde el micrófono
-def st_audiorec():
-    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-    import av
-
-    audio_buffer = []
-
-    def audio_frame_callback(frame):
-        audio_buffer.append(frame.to_ndarray().tobytes())
-        return frame
-
-    webrtc_streamer(
-        key="audio_recorder",
-        mode=WebRtcMode.SENDONLY,
-        rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
-    )
-
-    if st.button("Detener grabación"):
-        return b"".join(audio_buffer)
-    return None
