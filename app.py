@@ -18,11 +18,16 @@ st.set_page_config(page_title="Transcripción a Reporte Policial")
 # Título
 st.title("Convertidor de Notas de Audio a Reporte Policial")
 
-# Cola para almacenar los datos de audio
+# Cola para almacenar los datos de audio (opcional, no usada en esta versión)
 audio_queue = queue.Queue()
 
 # Configuración RTC para mayor estabilidad
-rtc_config = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+rtc_config = RTCConfiguration({
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]}
+    ]
+})
 
 # Clase para procesar el audio del micrófono
 class AudioProcessor(AudioProcessorBase):
@@ -35,7 +40,7 @@ class AudioProcessor(AudioProcessorBase):
             audio_data = frame.to_ndarray()
             logger.info(f"Audio recibido: {audio_data.shape}")
             self.audio_buffer.append(audio_data)
-            audio_queue.put(audio_data)
+            audio_queue.put(audio_data)  # Opcional, si quieres usar la cola
             return frame
         except Exception as e:
             logger.error(f"Error al procesar audio: {str(e)}")
@@ -47,6 +52,7 @@ class AudioProcessor(AudioProcessorBase):
             try:
                 combined_audio = np.concatenate(self.audio_buffer)
                 logger.info(f"Audio combinado: {combined_audio.shape}")
+                self.audio_buffer = []  # Limpiar el buffer después de usarlo
                 return combined_audio
             except Exception as e:
                 logger.error(f"Error al concatenar audio: {str(e)}")
@@ -90,7 +96,7 @@ def transcribe_audio(audio_data):
 
 # Función para generar reporte policial usando Dashscope
 def generate_police_report(transcription):
-    url = "https://dashscope-intl.aliyuncs.com"
+    url = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation"  # URL completa corregida
     headers = {
         "Authorization": f"Bearer {st.secrets['DASHSCOPE_API_KEY']}",
         "Content-Type": "application/json",
@@ -139,24 +145,33 @@ ctx = webrtc_streamer(
     audio_processor_factory=AudioProcessor,
     media_stream_constraints={"audio": True, "video": False},
     async_processing=True,
-    rtc_configuration=rtc_config,  # Configuración para estabilidad
+    rtc_configuration=rtc_config,
+    timeout=30  # Extendido para evitar cierre automático a los 5 segundos
 )
 
 # Estado de la sesión para manejar el procesamiento
 if "processing" not in st.session_state:
     st.session_state.processing = False
 
+# Mostrar estado de la grabación
 if ctx.state.playing:
-    st.info("Grabando... Presiona 'Stop' cuando termines.")
+    st.info("Grabando... Presiona 'Stop' en el componente para terminar.")
 else:
     st.info("Presiona 'Start' para comenzar a grabar.")
 
-if st.button("Procesar Grabación", disabled=st.session_state.processing or not ctx.state.playing):
+# Botón para procesar la grabación (solo habilitado cuando no está grabando)
+if st.button("Procesar Grabación", disabled=st.session_state.processing or ctx.state.playing):
     if ctx.audio_processor:
         st.session_state.processing = True
         audio_data = ctx.audio_processor.get_audio_data()
         
         if audio_data is not None:
+            # Reproducir el audio capturado para verificar (opcional)
+            buffer = BytesIO()
+            sf.write(buffer, audio_data, 16000, format='WAV')
+            buffer.seek(0)
+            st.audio(buffer, format="audio/wav")
+            
             with st.spinner("Transcribiendo audio..."):
                 transcription = transcribe_audio(audio_data)
                 
@@ -182,3 +197,8 @@ if st.button("Procesar Grabación", disabled=st.session_state.processing or not 
         st.session_state.processing = False
     else:
         st.error("El micrófono no está inicializado. Inicia la grabación primero.")
+
+# Mostrar logs en la interfaz (opcional para depuración)
+if st.checkbox("Mostrar logs de depuración"):
+    with open("streamlit.log", "r") as log_file:
+        st.text(log_file.read())
