@@ -5,7 +5,7 @@ from pydub import AudioSegment
 from io import BytesIO
 
 # Configuración de página
-st.set_page_config(page_title="Transcripción y Reporte Policial", layout="wide")
+st.set_page_config(page_title="Transcripción y Reporte Policial")
 
 # Obtener las API Keys desde los Secrets de Streamlit
 DASHSCOPE_API_KEY = st.secrets["DASHSCOPE_API_KEY"]
