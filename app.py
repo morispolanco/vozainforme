@@ -1,80 +1,45 @@
-
 import streamlit as st
-import pyaudio
-import wave
-import json
 import requests
-import base64
+import json
 import os
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from pydub import AudioSegment
+import speech_recognition as sr
+import io
 
-# Cargar API Keys desde secrets
-from streamlit import secrets
-lemonfox_api_key = secrets["lemonfox_api_key"]
-dashscope_api_key = secrets["dashscope_api_key"]
+# Configuración de las API Keys desde los Secrets de Streamlit
+LEMON_FOX_API_KEY = st.secrets["lemon_fox"]["api_key"]
+DASHSCOPE_API_KEY = st.secrets["dashscope"]["api_key"]
 
-# Configuración de la aplicación
-st.title("Transcripción de audio y generación de reporte policial")
+# Función para transcribir audio usando SpeechRecognition
+def transcribir_audio_desde_microfono(audio_file):
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(audio_file) as source:
+        audio = recognizer.record(source)
+        try:
+            texto = recognizer.recognize_google(audio, language="es-ES")
+            return texto
+        except sr.UnknownValueError:
+            st.error("No se pudo entender el audio")
+            return None
+        except sr.RequestError:
+            st.error("Error al conectar con el servicio de reconocimiento de voz")
+            return None
 
-# Configuración del micrófono
-CHUNK = 1024
-FORMAT = pyaudio.paInt16
-CHANNELS = 2
-RATE = 44100
-RECORD_SECONDS = 5
-WAVE_OUTPUT_FILENAME = "output.wav"
-
-# Función para grabar audio
-def grabar_audio():
-    p = pyaudio.PyAudio()
-    stream = p.open(format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    frames_per_buffer=CHUNK)
-    print("Grabando audio...")
-    frames = []
-    for i in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
-        data = stream.read(CHUNK)
-        frames.append(data)
-    print("Grabación finalizada.")
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
-    wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(p.get_sample_size(FORMAT))
-    wf.setframerate(RATE)
-    wf.writeframes(b''.join(frames))
-    wf.close()
-
-# Función para transcribir audio con Lemon Fox
-def transcribir_audio():
-    url = "https://api.lemonfox.ai/v1/audio/transcriptions"
-    headers = {
-        "Authorization": f"Bearer {lemonfox_api_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "file": f"https://output.lemonfox.ai/{WAVE_OUTPUT_FILENAME}",
-        "language": "spanish",
-        "response_format": "json"
-    }
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    return response.json()
-
-# Función para generar reporte policial con Dashscope
+# Función para generar el reporte policial usando Dashscope
 def generar_reporte_policial(transcripcion):
     url = "https://dashscope-intl.aliyuncs.com"
     headers = {
-        "Authorization": f"Bearer {dashscope_api_key}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
+        "Content-Type": "application/json",
+        "X-DashScope-SSE": "enable"
     }
     data = {
         "model": "qwen-max",
         "input": {
             "messages": [
-                {"role": "system", "content": ""},
-                {"role": "user", "content": transcripcion}
+                {"role": "system", "content": "Eres un asistente que ayuda a generar reportes policiales en español."},
+                {"role": "user", "content": f"Organiza la siguiente transcripción en un reporte policial: {transcripcion}"}
             ]
         },
         "parameters": {
@@ -84,21 +49,73 @@ def generar_reporte_policial(transcripcion):
         }
     }
     response = requests.post(url, headers=headers, data=json.dumps(data))
-    return response.json()
-
-# Grabar audio
-if st.button("Grabar audio"):
-    grabar_audio()
-
-# Transcribir audio
-if st.button("Transcribir audio"):
-    transcripcion = transcribir_audio()
-    st.write(transcripcion)
-
-# Generar reporte policial
-if st.button("Generar reporte policial"):
-    if "transcripcion" in st.session_state:
-        reporte = generar_reporte_policial(st.session_state.transcripcion)
-        st.write(reporte)
+    if response.status_code == 200:
+        return response.json()
     else:
-        st.error("No hay transcripción disponible")
+        st.error(f"Error al generar el reporte: {response.status_code}")
+        return None
+
+# Interfaz de Streamlit
+st.title("Transcripción y Reporte Policial desde Micrófono")
+
+# Captura de audio desde el micrófono
+def audio_callback(audio):
+    # Convertir el audio a un formato compatible con SpeechRecognition
+    audio_segment = AudioSegment(
+        data=audio.to_ndarray().tobytes(),
+        sample_width=audio.sample_width,
+        frame_rate=audio.sample_rate,
+        channels=1
+    )
+    # Guardar el audio en un archivo temporal
+    audio_segment.export("temp_audio.wav", format="wav")
+    return audio_segment
+
+# Usar streamlit-webrtc para capturar audio desde el micrófono
+webrtc_ctx = webrtc_streamer(
+    key="microfono",
+    mode=WebRtcMode.SENDONLY,
+    audio_receiver_size=256,
+    media_stream_constraints={"audio": True},
+    async_processing=True,
+)
+
+if webrtc_ctx.audio_receiver:
+    st.write("Grabando audio... Habla ahora.")
+    audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=5)  # Grabar durante 5 segundos
+    if audio_frames:
+        # Combinar los frames de audio en un solo segmento
+        audio_segment = AudioSegment.empty()
+        for frame in audio_frames:
+            audio_segment += AudioSegment(
+                data=frame.to_ndarray().tobytes(),
+                sample_width=frame.sample_width,
+                frame_rate=frame.sample_rate,
+                channels=1
+            )
+        # Guardar el audio en un archivo temporal
+        audio_segment.export("temp_audio.wav", format="wav")
+        
+        # Transcribir el audio
+        st.write("Transcribiendo audio...")
+        transcripcion = transcribir_audio_desde_microfono("temp_audio.wav")
+        
+        if transcripcion:
+            st.write("Transcripción completada:")
+            st.write(transcripcion)
+            
+            # Generar el reporte policial
+            st.write("Generando reporte policial...")
+            reporte = generar_reporte_policial(transcripcion)
+            
+            if reporte:
+                st.write("Reporte policial generado:")
+                st.write(reporte)
+            else:
+                st.error("No se pudo generar el reporte policial.")
+        else:
+            st.error("No se pudo transcribir el audio.")
+    else:
+        st.warning("No se detectó audio. Por favor, habla en el micrófono.")
+else:
+    st.warning("El micrófono no está activado. Por favor, permite el acceso al micrófono.")
