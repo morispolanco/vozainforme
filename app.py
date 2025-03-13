@@ -18,7 +18,7 @@ st.set_page_config(page_title="Transcripción a Reporte Policial")
 # Título
 st.title("Convertidor de Notas de Audio a Reporte Policial")
 
-# Cola para almacenar los datos de audio (opcional, no usada en esta versión)
+# Cola para almacenar los datos de audio (opcional)
 audio_queue = queue.Queue()
 
 # Configuración RTC para mayor estabilidad
@@ -33,14 +33,14 @@ rtc_config = RTCConfiguration({
 class AudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.audio_buffer = []
-        self.sample_rate = 16000  # Frecuencia de muestreo fija
+        self.sample_rate = 16000
 
     def recv(self, frame):
         try:
             audio_data = frame.to_ndarray()
             logger.info(f"Audio recibido: {audio_data.shape}")
             self.audio_buffer.append(audio_data)
-            audio_queue.put(audio_data)  # Opcional, si quieres usar la cola
+            audio_queue.put(audio_data)
             return frame
         except Exception as e:
             logger.error(f"Error al procesar audio: {str(e)}")
@@ -52,7 +52,7 @@ class AudioProcessor(AudioProcessorBase):
             try:
                 combined_audio = np.concatenate(self.audio_buffer)
                 logger.info(f"Audio combinado: {combined_audio.shape}")
-                self.audio_buffer = []  # Limpiar el buffer después de usarlo
+                self.audio_buffer = []
                 return combined_audio
             except Exception as e:
                 logger.error(f"Error al concatenar audio: {str(e)}")
@@ -96,7 +96,7 @@ def transcribe_audio(audio_data):
 
 # Función para generar reporte policial usando Dashscope
 def generate_police_report(transcription):
-    url = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation"  # URL completa corregida
+    url = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
     headers = {
         "Authorization": f"Bearer {st.secrets['DASHSCOPE_API_KEY']}",
         "Content-Type": "application/json",
@@ -145,28 +145,24 @@ ctx = webrtc_streamer(
     audio_processor_factory=AudioProcessor,
     media_stream_constraints={"audio": True, "video": False},
     async_processing=True,
-    rtc_configuration=rtc_config,
-    timeout=30  # Extendido para evitar cierre automático a los 5 segundos
+    rtc_configuration=rtc_config
 )
 
 # Estado de la sesión para manejar el procesamiento
 if "processing" not in st.session_state:
     st.session_state.processing = False
 
-# Mostrar estado de la grabación
 if ctx.state.playing:
     st.info("Grabando... Presiona 'Stop' en el componente para terminar.")
 else:
     st.info("Presiona 'Start' para comenzar a grabar.")
 
-# Botón para procesar la grabación (solo habilitado cuando no está grabando)
 if st.button("Procesar Grabación", disabled=st.session_state.processing or ctx.state.playing):
     if ctx.audio_processor:
         st.session_state.processing = True
         audio_data = ctx.audio_processor.get_audio_data()
         
         if audio_data is not None:
-            # Reproducir el audio capturado para verificar (opcional)
             buffer = BytesIO()
             sf.write(buffer, audio_data, 16000, format='WAV')
             buffer.seek(0)
@@ -197,8 +193,3 @@ if st.button("Procesar Grabación", disabled=st.session_state.processing or ctx.
         st.session_state.processing = False
     else:
         st.error("El micrófono no está inicializado. Inicia la grabación primero.")
-
-# Mostrar logs en la interfaz (opcional para depuración)
-if st.checkbox("Mostrar logs de depuración"):
-    with open("streamlit.log", "r") as log_file:
-        st.text(log_file.read())
