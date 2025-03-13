@@ -1,195 +1,189 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode, RTCConfiguration
 import requests
 import json
-import queue
-import numpy as np
-from io import BytesIO
-import soundfile as sf
-import logging
-
-# Configuración de logging para depuración
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import os
+import tempfile
+import time
 
 # Configuración de la página
-st.set_page_config(page_title="Transcripción a Reporte Policial")
+st.set_page_config(
+    page_title="Transcriptor de Notas Policiales",
+    page_icon="🚔",
+    layout="wide"
+)
 
-# Título
-st.title("Convertidor de Notas de Audio a Reporte Policial")
+# Título y descripción
+st.title("🚔 Transcriptor de Notas Policiales")
+st.markdown("""
+Esta aplicación te permite:
+1. Subir un archivo de audio con notas policiales en español
+2. Transcribir el audio usando Lemon Fox
+3. Generar un reporte policial estructurado usando Dashscope (Qwen-Max)
+""")
 
-# Cola para almacenar los datos de audio (opcional)
-audio_queue = queue.Queue()
-
-# Configuración RTC para mayor estabilidad
-rtc_config = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]}
-    ]
-})
-
-# Clase para procesar el audio del micrófono
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.audio_buffer = []
-        self.sample_rate = 16000
-
-    def recv(self, frame):
-        try:
-            audio_data = frame.to_ndarray()
-            logger.info(f"Audio recibido: {audio_data.shape}")
-            self.audio_buffer.append(audio_data)
-            audio_queue.put(audio_data)
-            return frame
-        except Exception as e:
-            logger.error(f"Error al procesar audio: {str(e)}")
-            st.error(f"Error al procesar audio: {str(e)}")
-            return frame
-
-    def get_audio_data(self):
-        if self.audio_buffer:
-            try:
-                combined_audio = np.concatenate(self.audio_buffer)
-                logger.info(f"Audio combinado: {combined_audio.shape}")
-                self.audio_buffer = []
-                return combined_audio
-            except Exception as e:
-                logger.error(f"Error al concatenar audio: {str(e)}")
-                st.error(f"Error al concatenar audio: {str(e)}")
-                return None
-        logger.warning("No hay datos de audio en el buffer")
-        return None
-
-# Función para transcribir audio usando Lemon Fox
-def transcribe_audio(audio_data):
+# Función para transcribir audio con Lemon Fox
+def transcribe_audio(audio_file, language="spanish"):
+    # Obtener API key de los secrets de Streamlit
+    lemonfox_api_key = st.secrets["LEMONFOX_API_KEY"]
+    
+    # Endpoint de Lemon Fox
     url = "https://api.lemonfox.ai/v1/audio/transcriptions"
+    
+    # Configurar headers y datos
     headers = {
-        "Authorization": f"Bearer {st.secrets['LEMONFOX_API_KEY']}"
+        "Authorization": f"Bearer {lemonfox_api_key}"
     }
     
-    buffer = BytesIO()
-    try:
-        sf.write(buffer, audio_data, 16000, format='WAV')
-        buffer.seek(0)
-        logger.info("Audio convertido a WAV")
-    except Exception as e:
-        logger.error(f"Error al convertir audio a WAV: {str(e)}")
-        st.error(f"Error al convertir audio a WAV: {str(e)}")
-        return None
-    
     files = {
-        "file": ("audio.wav", buffer, "audio/wav"),
-        "language": (None, "spanish"),
+        "file": audio_file,
+        "language": (None, language),
         "response_format": (None, "json")
     }
     
-    try:
+    with st.spinner("Transcribiendo audio..."):
         response = requests.post(url, headers=headers, files=files)
-        response.raise_for_status()
-        logger.info("Transcripción exitosa")
-        return response.json()["text"]
-    except Exception as e:
-        logger.error(f"Error en la transcripción: {str(e)}")
-        st.error(f"Error en la transcripción: {str(e)}")
-        return None
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Error en la transcripción: {response.text}")
+            return None
 
-# Función para generar reporte policial usando Dashscope
+# Función para generar reporte policial con Dashscope
 def generate_police_report(transcription):
+    # Obtener API key de los secrets de Streamlit
+    dashscope_api_key = st.secrets["DASHSCOPE_API_KEY"]
+    
+    # Endpoint de Dashscope
     url = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+    
+    # Configurar headers
     headers = {
-        "Authorization": f"Bearer {st.secrets['DASHSCOPE_API_KEY']}",
+        "Authorization": f"Bearer {dashscope_api_key}",
         "Content-Type": "application/json",
         "X-DashScope-SSE": "enable"
     }
     
-    prompt = f"""Convierte el siguiente texto en un reporte policial formal en español. 
-    Usa un formato profesional con secciones claras como: 
-    1. Datos del reporte
-    2. Declaración
-    3. Observaciones
-    Mantén la información original pero organízala adecuadamente:
+    # Prompt para el sistema
+    system_prompt = """Eres un asistente especializado en redactar reportes policiales profesionales.
+    Tu tarea es convertir transcripciones de notas de audio en reportes policiales estructurados.
+    El reporte debe incluir:
     
-    {transcription}"""
+    1. Fecha y hora del incidente
+    2. Ubicación
+    3. Descripción de los hechos
+    4. Personas involucradas
+    5. Evidencia mencionada
+    6. Acciones tomadas
+    7. Recomendaciones
     
-    payload = {
+    Organiza la información de manera clara y profesional. Si alguna sección no tiene información disponible,
+    indícalo como "No especificado". Mantén un tono formal y objetivo."""
+    
+    # Prompt para el usuario
+    user_prompt = f"""Convierte la siguiente transcripción de audio en un reporte policial estructurado:
+    
+    {transcription}
+    
+    Por favor, extrae toda la información relevante y organízala según las secciones mencionadas."""
+    
+    # Datos para la solicitud
+    data = {
         "model": "qwen-max",
         "input": {
             "messages": [
-                {"role": "system", "content": "Eres un asistente policial experto en redactar reportes formales"},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
             ]
         },
         "parameters": {
             "result_format": "message",
             "top_p": 0.8,
-            "temperature": 1
+            "temperature": 0.7
         }
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        logger.info("Reporte policial generado")
-        return response.json()["output"]["choices"][0]["message"]["content"]
-    except Exception as e:
-        logger.error(f"Error al generar reporte: {str(e)}")
-        st.error(f"Error al generar reporte: {str(e)}")
-        return None
-
-# Interfaz de usuario con micrófono
-st.subheader("Grabación de Audio")
-ctx = webrtc_streamer(
-    key="audio",
-    mode=WebRtcMode.SENDONLY,
-    audio_processor_factory=AudioProcessor,
-    media_stream_constraints={"audio": True, "video": False},
-    async_processing=True,
-    rtc_configuration=rtc_config
-)
-
-# Estado de la sesión para manejar el procesamiento
-if "processing" not in st.session_state:
-    st.session_state.processing = False
-
-if ctx.state.playing:
-    st.info("Grabando... Presiona 'Stop' en el componente para terminar.")
-else:
-    st.info("Presiona 'Start' para comenzar a grabar.")
-
-if st.button("Procesar Grabación", disabled=st.session_state.processing or ctx.state.playing):
-    if ctx.audio_processor:
-        st.session_state.processing = True
-        audio_data = ctx.audio_processor.get_audio_data()
+    with st.spinner("Generando reporte policial..."):
+        response = requests.post(url, headers=headers, json=data)
         
-        if audio_data is not None:
-            buffer = BytesIO()
-            sf.write(buffer, audio_data, 16000, format='WAV')
-            buffer.seek(0)
-            st.audio(buffer, format="audio/wav")
-            
-            with st.spinner("Transcribiendo audio..."):
-                transcription = transcribe_audio(audio_data)
-                
-            if transcription:
-                st.subheader("Transcripción")
-                st.write(transcription)
-                
-                with st.spinner("Generando reporte policial..."):
-                    report = generate_police_report(transcription)
-                    
-                if report:
-                    st.subheader("Reporte Policial")
-                    st.markdown(report)
-                    
-                    st.download_button(
-                        label="Descargar Reporte",
-                        data=report,
-                        file_name="reporte_policial.txt",
-                        mime="text/plain"
-                    )
+        if response.status_code == 200:
+            result = response.json()
+            # Extraer el contenido del mensaje de respuesta
+            if "output" in result and "message" in result["output"]:
+                return result["output"]["message"]["content"]
+            else:
+                st.error("Formato de respuesta inesperado")
+                return None
         else:
-            st.warning("No se detectó audio. Por favor, graba algo primero.")
-        st.session_state.processing = False
-    else:
-        st.error("El micrófono no está inicializado. Inicia la grabación primero.")
+            st.error(f"Error al generar el reporte: {response.text}")
+            return None
+
+# Interfaz principal
+st.header("Subir archivo de audio")
+uploaded_file = st.file_uploader("Selecciona un archivo de audio (.mp3, .wav, .m4a)", 
+                                type=["mp3", "wav", "m4a"])
+
+if uploaded_file is not None:
+    # Mostrar reproductor de audio
+    st.audio(uploaded_file, format=f"audio/{uploaded_file.name.split('.')[-1]}")
+    
+    # Botón para iniciar el proceso
+    if st.button("Procesar Audio"):
+        # Guardar el archivo temporalmente para procesarlo
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            temp_file_path = tmp_file.name
+        
+        try:
+            # Abrir el archivo temporal para enviarlo a la API
+            with open(temp_file_path, "rb") as audio_file:
+                # Transcribir el audio
+                transcription_result = transcribe_audio(audio_file)
+                
+                if transcription_result and "text" in transcription_result:
+                    transcription_text = transcription_result["text"]
+                    
+                    # Mostrar la transcripción
+                    st.header("Transcripción")
+                    st.text_area("Texto transcrito", transcription_text, height=200)
+                    
+                    # Generar el reporte policial
+                    police_report = generate_police_report(transcription_text)
+                    
+                    if police_report:
+                        # Mostrar el reporte policial
+                        st.header("Reporte Policial")
+                        st.markdown(police_report)
+                        
+                        # Opción para descargar el reporte
+                        st.download_button(
+                            label="Descargar Reporte",
+                            data=police_report,
+                            file_name="reporte_policial.md",
+                            mime="text/markdown"
+                        )
+        finally:
+            # Eliminar el archivo temporal
+            os.unlink(temp_file_path)
+
+# Información adicional
+st.sidebar.header("Información")
+st.sidebar.info("""
+### Sobre esta aplicación
+Esta aplicación utiliza:
+- **Lemon Fox API** para transcripción de audio
+- **Dashscope API (Qwen-Max)** para generar reportes estructurados
+
+### Idiomas soportados
+Actualmente, la aplicación está optimizada para audio en español.
+""")
+
+# Footer
+st.markdown("---")
+st.markdown("Desarrollado con ❤️ usando Streamlit")
