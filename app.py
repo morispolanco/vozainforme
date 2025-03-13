@@ -1,20 +1,28 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode, RTCConfiguration
 import requests
 import json
 import queue
 import numpy as np
 from io import BytesIO
 import soundfile as sf
+import logging
+
+# Configuración de logging para depuración
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configuración de la página
 st.set_page_config(page_title="Transcripción a Reporte Policial")
 
 # Título
-st.title("Convertidor de Notas de Audio a Reporte Policial (Micrófono)")
+st.title("Convertidor de Notas de Audio a Reporte Policial")
 
 # Cola para almacenar los datos de audio
 audio_queue = queue.Queue()
+
+# Configuración RTC para mayor estabilidad
+rtc_config = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
 # Clase para procesar el audio del micrófono
 class AudioProcessor(AudioProcessorBase):
@@ -25,20 +33,26 @@ class AudioProcessor(AudioProcessorBase):
     def recv(self, frame):
         try:
             audio_data = frame.to_ndarray()
+            logger.info(f"Audio recibido: {audio_data.shape}")
             self.audio_buffer.append(audio_data)
             audio_queue.put(audio_data)
             return frame
         except Exception as e:
+            logger.error(f"Error al procesar audio: {str(e)}")
             st.error(f"Error al procesar audio: {str(e)}")
             return frame
 
     def get_audio_data(self):
         if self.audio_buffer:
             try:
-                return np.concatenate(self.audio_buffer)
+                combined_audio = np.concatenate(self.audio_buffer)
+                logger.info(f"Audio combinado: {combined_audio.shape}")
+                return combined_audio
             except Exception as e:
+                logger.error(f"Error al concatenar audio: {str(e)}")
                 st.error(f"Error al concatenar audio: {str(e)}")
                 return None
+        logger.warning("No hay datos de audio en el buffer")
         return None
 
 # Función para transcribir audio usando Lemon Fox
@@ -48,12 +62,13 @@ def transcribe_audio(audio_data):
         "Authorization": f"Bearer {st.secrets['LEMONFOX_API_KEY']}"
     }
     
-    # Convertir audio a formato WAV
     buffer = BytesIO()
     try:
         sf.write(buffer, audio_data, 16000, format='WAV')
         buffer.seek(0)
+        logger.info("Audio convertido a WAV")
     except Exception as e:
+        logger.error(f"Error al convertir audio a WAV: {str(e)}")
         st.error(f"Error al convertir audio a WAV: {str(e)}")
         return None
     
@@ -66,8 +81,10 @@ def transcribe_audio(audio_data):
     try:
         response = requests.post(url, headers=headers, files=files)
         response.raise_for_status()
+        logger.info("Transcripción exitosa")
         return response.json()["text"]
     except Exception as e:
+        logger.error(f"Error en la transcripción: {str(e)}")
         st.error(f"Error en la transcripción: {str(e)}")
         return None
 
@@ -107,8 +124,10 @@ def generate_police_report(transcription):
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
+        logger.info("Reporte policial generado")
         return response.json()["output"]["choices"][0]["message"]["content"]
     except Exception as e:
+        logger.error(f"Error al generar reporte: {str(e)}")
         st.error(f"Error al generar reporte: {str(e)}")
         return None
 
@@ -116,10 +135,11 @@ def generate_police_report(transcription):
 st.subheader("Grabación de Audio")
 ctx = webrtc_streamer(
     key="audio",
-    mode=WebRtcMode.SENDONLY,  # Solo envía audio, no recibe
+    mode=WebRtcMode.SENDONLY,
     audio_processor_factory=AudioProcessor,
     media_stream_constraints={"audio": True, "video": False},
-    async_processing=True  # Procesamiento asíncrono para evitar bloqueos
+    async_processing=True,
+    rtc_configuration=rtc_config,  # Configuración para estabilidad
 )
 
 # Estado de la sesión para manejar el procesamiento
@@ -131,7 +151,7 @@ if ctx.state.playing:
 else:
     st.info("Presiona 'Start' para comenzar a grabar.")
 
-if st.button("Procesar Grabación", disabled=st.session_state.processing):
+if st.button("Procesar Grabación", disabled=st.session_state.processing or not ctx.state.playing):
     if ctx.audio_processor:
         st.session_state.processing = True
         audio_data = ctx.audio_processor.get_audio_data()
