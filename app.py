@@ -8,7 +8,7 @@ from io import BytesIO
 import soundfile as sf
 
 # Configuración de la página
-st.set_page_config(page_title="Transcripción a Reporte Policial con Micrófono", layout="narrow")
+st.set_page_config(page_title="Transcripción a Reporte Policial")
 
 # Título
 st.title("Convertidor de Notas de Audio a Reporte Policial (Micrófono)")
