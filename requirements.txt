@@ -1,10 +1,5 @@
-
 streamlit
-pyaudio
-wave
 requests
-json
-base64
-secretmanager
-lemonfox
-dashscope
+pydub
+SpeechRecognition
+streamlit-webrtc
